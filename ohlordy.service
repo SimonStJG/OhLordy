@@ -1,0 +1,10 @@
+[Unit]
+Description=OhLordy
+
+[Service]
+ExecStart=ohlordy
+Restart=always
+User=pi
+
+[Install]
+WantedBy=multi-user.target

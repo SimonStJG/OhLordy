@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from time import sleep, time
 
 import dataclasses
@@ -26,9 +27,19 @@ class ButtonState(Enum):
 is_raspberry_pi = False
 time_between_ticks = 0.05
 led_blink_speed = 10  # in ticks
-log_file_name = "ohlordy.log"
-tracks_directory = "/home/simon/code/lordy/tracks"
 
+# TODO Do this with configparser
+if is_raspberry_pi:
+    tracks_directory = "/home/pi/OhLordy/tracks"
+    log_file_name = "/var/log/ohlordy/ohlordy.log"
+    playback_state_file_name = "/home/pi/OhLordy/playback_state"
+else:
+    tracks_directory = str(Path(__file__).parent / "tracks")
+    log_file_name = "ohlordy.log"
+    playback_state_file_name = "playback_state"
+
+rpi_led_pin = 17
+rpi_handset_pin = 4
 
 tracks = [
     # "0.00.1 Credits.mp3",
@@ -135,9 +146,9 @@ class ButtonDebouncer:
 class BlinkingLed:
     def __init__(self, set_led_state, is_blinking):
         self.set_led_state = set_led_state
-        self.is_blinking = is_blinking
         self.led_state = False
         self.tick_count = 0
+        self.set_blinking(is_blinking)
 
     def tick(self):
         if not self.is_blinking:
@@ -145,25 +156,25 @@ class BlinkingLed:
 
         self.tick_count += 1
         if self.tick_count > led_blink_speed:
-            logger.info("LED blink")
+            logger.debug("LED blink %s", self.led_state)
             self.tick_count = 0
             self.led_state = not self.led_state
             self.set_led_state(self.led_state)
 
     def set_blinking(self, is_blinking):
         self.is_blinking = is_blinking
+        if not self.is_blinking:
+            self.set_led_state(True)
 
 
 class StateFile:
-    _filename = "playback_state"
-
     def read(self):
-        with open(self._filename, "r") as f:
+        with open(playback_state_file_name, "r") as f:
             raw = json.load(f)
         return PlaybackState(**raw)
 
     def write(self, playback_state):
-        with open(self._filename, "w") as f:
+        with open(playback_state_file_name, "w") as f:
             json.dump(dataclasses.asdict(playback_state), f)
 
 
@@ -243,13 +254,13 @@ def cli():
         audio_player = AudioPlayer(playback_state)
 
         if is_raspberry_pi:
-            raise NotImplementedError()
+            io = rpi_io
         else:
             io = keyboard_io
 
         with io() as (button_pressed, set_led_state):
             main_loop(audio_player, button_pressed, set_led_state, state_file)
-    except Exception:
+    except (KeyboardInterrupt, Exception):
         logger.error("Oh dear", exc_info=True)
         sys.exit(1)
 
@@ -260,37 +271,30 @@ def main_loop(audio_player, button_pressed, set_led_state, state_file):
     is_playing = False
     debouncer = ButtonDebouncer()
     blinking_led = BlinkingLed(set_led_state, is_blinking=True)
-
+    
     while True:
-        try:
-            debouncer.set_raw_state(button_pressed())
-            debounced_button_state = debouncer.get_debounced_state()
-            blinking_led.tick()
+        debouncer.set_raw_state(button_pressed())
+        debounced_button_state = debouncer.get_debounced_state()
+        blinking_led.tick()
 
-            logger.debug("debounced_button_state: %s", debounced_button_state)
-            if is_playing:
-                playback_state = audio_player.tick()
-                logger.debug(playback_state)
-                state_file.write(playback_state)
+        logger.debug("debounced_button_state: %s", debounced_button_state)
+        if is_playing:
+            playback_state = audio_player.tick()
+            logger.debug(playback_state)
+            state_file.write(playback_state)
 
-                if debounced_button_state == ButtonState.ON:
-                    logger.info("Pausing audio")
-                    audio_player.pause()
-                    blinking_led.set_blinking(True)
-                    is_playing = False
+            if debounced_button_state == ButtonState.ON:
+                logger.info("Pausing audio")
+                audio_player.pause()
+                blinking_led.set_blinking(True)
+                is_playing = False
 
-            else:
-                set_led_state(True)
-
-                if debounced_button_state == ButtonState.OFF:
-                    logger.info("Playing audio")
-                    audio_player.play()
-                    blinking_led.set_blinking(False)
-                    is_playing = True
-
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt")
-            break
+        else:
+            if debounced_button_state == ButtonState.OFF:
+                logger.info("Playing audio")
+                audio_player.play()
+                blinking_led.set_blinking(False)
+                is_playing = True
 
         sleep(time_between_ticks)
 
@@ -338,6 +342,31 @@ def keyboard_io():
     curses.echo()
 
     curses.endwin()
+
+
+@contextmanager
+def rpi_io():
+    import RPi.GPIO as GPIO
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(rpi_handset_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    GPIO.setup(rpi_led_pin, GPIO.OUT)
+
+    def is_button_press():
+        raw = GPIO.input(rpi_handset_pin)
+        if raw == GPIO.LOW:
+            return False
+        elif raw == GPIO.HIGH:
+            return True
+        else:
+            raise NotImplementedError()
+
+    def set_led_state(state):
+        GPIO.output(rpi_led_pin, state)
+
+    yield is_button_press, set_led_state
+
+    GPIO.cleanup()
 
 
 def await_condition(condition, timeout_seconds):
