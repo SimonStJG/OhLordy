@@ -3,11 +3,13 @@ from dataclasses import dataclass
 from enum import Enum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from time import sleep, time
 
 import dataclasses
 import json
 import logging
+import os
 import sys
 import vlc
 
@@ -174,8 +176,10 @@ class StateFile:
         return PlaybackState(**raw)
 
     def write(self, playback_state):
-        with open(playback_state_file_name, "w") as f:
+        with NamedTemporaryFile("w", delete=False) as f:
             json.dump(dataclasses.asdict(playback_state), f)
+            os.fsync(f)
+        os.rename(f.name, playback_state_file_name)
 
 
 class AudioPlayer:
@@ -249,6 +253,7 @@ def cli():
         except Exception:
             logger.exception("Unable to read state, using default")
             playback_state = starting_playback_state
+            state_file.write(playback_state)
         logger.info("State: %s", playback_state)
 
         audio_player = AudioPlayer(playback_state)
@@ -271,7 +276,7 @@ def main_loop(audio_player, button_pressed, set_led_state, state_file):
     is_playing = False
     debouncer = ButtonDebouncer()
     blinking_led = BlinkingLed(set_led_state, is_blinking=True)
-    
+
     while True:
         debouncer.set_raw_state(button_pressed())
         debounced_button_state = debouncer.get_debounced_state()

@@ -9,6 +9,7 @@ fi
 sed -i "/is_raspberry_pi =/c\is_raspberry_pi = True" ohlordy.py
 
 apt update
+apt upgrade -y
 
 # python3-distutils required for pip because of https://github.com/pypa/get-pip/issues/43
 apt install -y \
@@ -24,10 +25,10 @@ curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
 python3 get-pip.py
 python3 -m pip install .
 
-sudo mkdir -p /var/log/ohlordy
-sudo chown pi /var/log/ohlordy
+mkdir -p /var/log/ohlordy
+chown pi /var/log/ohlordy
 
-sudo cp ohlordy.service /etc/systemd/system/
+cp ohlordy.service /etc/systemd/system/
 
-sudo systemctl enable myscript.service
-sudo systemctl start myscript.service
+systemctl enable ohlordy.service
+systemctl start ohlordy.service
